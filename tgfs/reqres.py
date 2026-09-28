@@ -2,7 +2,7 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from io import IOBase
-from typing import AsyncIterator, Dict, Optional, Tuple
+from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 from tgfs.tasks.integrations import TaskTracker
 
@@ -315,3 +315,22 @@ class FileMessageImported(FileMessage):
         cls, message_id: int, size: int, name: str = "unnamed"
     ) -> "FileMessageImported":
         return cls(name=name, size=size, message_id=message_id)
+
+
+@dataclass
+class PreUploadedFileMessage(FileMessage):
+    """A file whose content already exists in Telegram as one or more messages.
+
+    Used by the SFTP streaming upload path: parts are uploaded as they
+    arrive, and this message type carries the resulting ``SentFileMessage``
+    objects so the version can be committed without re-uploading.
+    """
+
+    parts: List[SentFileMessage] = field(default_factory=list)
+
+    @classmethod
+    def new(
+        cls, name: str, parts: List[SentFileMessage]
+    ) -> "PreUploadedFileMessage":
+        total_size = sum(p.size for p in parts)
+        return cls(name=name, size=total_size, parts=parts)

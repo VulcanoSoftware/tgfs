@@ -14,6 +14,7 @@ from tgfs.app.sftp.server import make_server_factory, make_sftp_factory
 from tgfs.config import SFTPConfig
 from tgfs.core import Client
 from tgfs.core.model import TGFSDirectory, TGFSFileDesc, TGFSFileVersion
+from tgfs.reqres import PreUploadedFileMessage, SentFileMessage
 
 CONTENT = bytes(range(256)) * 400  # 100 KiB
 CREATED_AT = datetime.datetime(2024, 1, 1, 12, 0, 0)

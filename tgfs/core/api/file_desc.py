@@ -11,6 +11,7 @@ from tgfs.reqres import (
     FileContent,
     FileMessage,
     FileMessageImported,
+    PreUploadedFileMessage,
     SentFileMessage,
     UploadableFileMessage,
 )
@@ -48,10 +49,14 @@ class FileDescApi:
         )
 
     async def get_sent_file_message(
-        self, file_msg: UploadableFileMessage | FileMessageImported
+        self, file_msg: UploadableFileMessage
+        | FileMessageImported
+        | PreUploadedFileMessage
     ) -> List[SentFileMessage]:
         if isinstance(file_msg, FileMessageImported):
             return [SentFileMessage(file_msg.message_id, file_msg.size)]
+        if isinstance(file_msg, PreUploadedFileMessage):
+            return file_msg.parts
         return await self.__fc_repo.save(file_msg)
 
     async def append_file_version(
@@ -59,7 +64,10 @@ class FileDescApi:
     ) -> FDRepositoryResp:
         fd = await self.get_file_desc(fr) if fr else TGFSFileDesc(name=file_msg.name)
 
-        if isinstance(file_msg, UploadableFileMessage | FileMessageImported):
+        if isinstance(
+            file_msg,
+            UploadableFileMessage | FileMessageImported | PreUploadedFileMessage,
+        ):
             sent_file_msg = await self.get_sent_file_message(file_msg)
             fd.add_version_from_sent_file_message(*sent_file_msg)
         else:
@@ -71,7 +79,10 @@ class FileDescApi:
         self, fr: TGFSFileRef, file_msg: FileMessage, version_id: str
     ) -> FDRepositoryResp:
         fd = await self.get_file_desc(fr)
-        if isinstance(file_msg, UploadableFileMessage | FileMessageImported):
+        if isinstance(
+            file_msg,
+            UploadableFileMessage | FileMessageImported | PreUploadedFileMessage,
+        ):
             sent_file_msg = await self.get_sent_file_message(file_msg)
             fv = TGFSFileVersion.from_sent_file_message(*sent_file_msg)
             fv.id = version_id

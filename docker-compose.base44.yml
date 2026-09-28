@@ -1,0 +1,54 @@
+services:
+  web:
+    image: node:24-alpine
+    working_dir: /app/tgfs-gh-pages
+    volumes:
+      - ./:/app
+      - frontend_node_modules:/app/tgfs-gh-pages/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_BASE_PATH=
+      - BASE44_PUBLIC_HOST_SUFFIX=${BASE44_PUBLIC_HOST_SUFFIX}
+    command: sh -c "npm install && npx next dev --turbopack -p 3000 -H 0.0.0.0"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: on-failure
+
+  api:
+    image: python:3.13-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - python_packages:/usr/local/lib/python3.13/site-packages
+      - api_data:/data
+    ports:
+      - "1900:1900"
+    env_file:
+      - ./.env.base44-defaults
+      - /run/base44/app.env
+    environment:
+      - TGFS_DATA_DIR=/data
+      - TGFS_CONFIG_FILE=config.yaml
+    command: >-
+      sh -c "which gcc || (apt-get update && apt-get install -y --no-install-recommends build-essential) &&
+      pip install --quiet poetry &&
+      python -m poetry config virtualenvs.create false &&
+      python -m poetry install --only=main --no-root &&
+      sh /app/scripts/dev-config.sh"
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    restart: on-failure
+
+volumes:
+  frontend_node_modules:
+  python_packages:
+  api_data:

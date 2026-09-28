@@ -229,6 +229,14 @@ class SFTPConfig:
     directory when empty). SFTP never announces the file size up front
     while Telegram uploads need it, so a whole file has to be buffered
     before it can be sent.
+
+    ``streaming_part_size_mb`` is the size at which a sequential SFTP
+    upload is flushed to Telegram as a separate file message.  Each part is
+    uploaded as soon as enough bytes have arrived, so the client's progress
+    bar reflects actual upload progress rather than stalling at 100% while
+    the spool is drained.  Only the final, incomplete part is buffered
+    until ``close()``.  A non-sequential write after parts have been pushed
+    falls back to spooling.
     """
 
     enabled: bool
@@ -238,14 +246,20 @@ class SFTPConfig:
     authorized_keys_dir: Optional[str]
     upload_buffer_size_mb: int
     upload_buffer_dir: Optional[str]
+    streaming_part_size_mb: int
 
     DEFAULT_PORT = 2222
     DEFAULT_HOST_KEY_FILE = "sftp_host_key"
     DEFAULT_UPLOAD_BUFFER_SIZE_MB = 64
+    DEFAULT_STREAMING_PART_SIZE_MB = 256
 
     @property
     def upload_buffer_size_bytes(self) -> int:
         return self.upload_buffer_size_mb * 1024 * 1024
+
+    @property
+    def streaming_part_size_bytes(self) -> int:
+        return self.streaming_part_size_mb * 1024 * 1024
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "SFTPConfig":
@@ -261,6 +275,14 @@ class SFTPConfig:
         if buffer_size_mb < 0:
             raise ValueError(
                 f"sftp.upload_buffer_size_mb must not be negative, got {buffer_size_mb}"
+            )
+
+        streaming_part_mb = int(
+            data.get("streaming_part_size_mb", cls.DEFAULT_STREAMING_PART_SIZE_MB)
+        )
+        if streaming_part_mb < 1:
+            raise ValueError(
+                f"sftp.streaming_part_size_mb must be at least 1, got {streaming_part_mb}"
             )
 
         return cls(
@@ -281,6 +303,7 @@ class SFTPConfig:
                 if data.get("upload_buffer_dir")
                 else None
             ),
+            streaming_part_size_mb=streaming_part_mb,
         )
 
 

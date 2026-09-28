@@ -1,3 +1,3 @@
 export default function myImageLoader({ src, width, quality }) {
-  return `/tgfs${src}`;
+  return `${process.env.NEXT_PUBLIC_BASE_PATH}${src}`;
 }

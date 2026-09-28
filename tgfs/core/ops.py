@@ -1,7 +1,7 @@
 import datetime
 import os.path
 from contextlib import AbstractAsyncContextManager, nullcontext
-from typing import AsyncIterator
+from typing import AsyncIterator, List
 
 from tgfs.errors import FileOrDirectoryDoesNotExist, InvalidPath
 from tgfs.reqres import (
@@ -11,8 +11,11 @@ from tgfs.reqres import (
     FileMessageFromStream,
     FileMessageImported,
     MessageRespWithDocument,
+    PreUploadedFileMessage,
+    SentFileMessage,
     UploadableFileMessage,
 )
+from tgfs.core.model import TGFSFileVersion
 from tgfs.tasks import create_upload_task
 
 from .client import Client
@@ -258,6 +261,43 @@ class Ops:
                 size=size,
             ),
         )
+
+    async def upload_part(self, data: bytes, name: str) -> List[SentFileMessage]:
+        """Upload a buffer as a Telegram file message and return the result.
+
+        Used by the SFTP streaming upload path: each flushed part is
+        uploaded independently, keeping only the resulting message ids.
+        """
+        file_msg = FileMessageFromBuffer.new(buffer=data, name=name)
+        return await self._client.fc_repo.save(file_msg)
+
+    async def delete_uploaded_parts(self, message_ids: List[int]) -> None:
+        """Delete Telegram messages left by an aborted streaming upload."""
+        await self._client.message_api.delete_messages(message_ids, force=True)
+
+    async def download_parts_back(
+        self, sent_messages: List[SentFileMessage], name: str
+    ) -> AsyncIterator[bytes]:
+        """Download already-uploaded parts back from Telegram.
+
+        Used when a non-sequential write forces a spool fallback after
+        parts have already been pushed: the parts are deleted, but their
+        content must be recovered into the spool so the upload can
+        continue.  Goes through the file-content repository so encryption
+        and mirror failover apply transparently.
+        """
+        fv = TGFSFileVersion.from_sent_file_message(*sent_messages)
+        stream = await self._client.fc_repo.get(fv, 0, -1, name)
+        async for chunk in stream:
+            yield chunk
+
+    async def commit_streamed_upload(
+        self, dirname: str, name: str, parts: List[SentFileMessage]
+    ) -> TGFSFileDesc:
+        """Commit already-uploaded parts as a new file version."""
+        file_msg = PreUploadedFileMessage.new(name=name, parts=parts)
+        d = self.cd(dirname)
+        return await self._client.file_api.upload(d, file_msg)
 
     async def import_from_existing_file_message(
         self, message: MessageRespWithDocument, remote: str
