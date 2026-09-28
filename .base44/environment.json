@@ -1,0 +1,37 @@
+{
+  "previewPort": 3000,
+  "healthPath": "/",
+  "startCommand": "docker compose -f docker-compose.base44.yml up -d",
+  "secrets": [
+    {
+      "name": "TGFS_API_ID",
+      "description": "Telegram API ID from https://my.telegram.org/apps",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    },
+    {
+      "name": "TGFS_API_HASH",
+      "description": "Telegram API hash from https://my.telegram.org/apps",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    },
+    {
+      "name": "TGFS_BOT_TOKEN",
+      "description": "Telegram bot token from @BotFather",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    },
+    {
+      "name": "TGFS_CHANNEL_ID",
+      "description": "Telegram private channel ID to use as file storage",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    },
+    {
+      "name": "TGFS_JWT_SECRET",
+      "description": "JWT signing secret for the backend API auth",
+      "requiredAtBoot": true,
+      "generatedForDevelopment": true
+    }
+  ]
+}
