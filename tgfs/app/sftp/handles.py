@@ -3,9 +3,10 @@ import errno
 import logging
 import os
 import tempfile
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, List, Optional
 
 from tgfs.core import Ops
+from tgfs.reqres import SentFileMessage
 
 logger = logging.getLogger(__name__)
 
@@ -133,27 +134,41 @@ class ReadHandle(Handle):
 
 
 class WriteHandle(Handle):
-    """Buffers an SFTP upload until its total size is known.
+    """Streams an SFTP upload to Telegram, part by part.
 
-    Telegram uploads need the size up front and SFTP never announces it, so
-    the payload is spooled -- in memory up to ``spool_max_bytes``, on disk
-    beyond that -- and only committed once the client closes the handle.
-    Buffering also makes out-of-order and sparse writes work, since the
-    spool can simply be seeked.
+    Sequential writes are uploaded as soon as a full streaming part has
+    arrived, keeping only the resulting message ids in memory.  The final,
+    incomplete part is buffered until ``close()``, when the total size is
+    finally known and the version is committed.
+
+    A non-sequential write after parts have been pushed triggers a spool
+    fallback: the uploaded parts are deleted, their content is downloaded
+    back, and the rest of the upload is spooled the way it was before
+    streaming.
     """
 
     def __init__(
         self,
         ops: Ops,
         path: str,
+        streaming_part_size: int,
         spool_max_bytes: int,
         spool_dir: Optional[str] = None,
     ):
         self._ops = ops
         self._path = path
-        self._spool = tempfile.SpooledTemporaryFile(
-            max_size=spool_max_bytes, dir=spool_dir
-        )
+        self._streaming_part_size = streaming_part_size
+        self._spool_max_bytes = spool_max_bytes
+        self._spool_dir = spool_dir
+
+        # Streaming state.
+        self._buffer = bytearray()
+        self._next_offset = 0
+        self._sent_messages: List[SentFileMessage] = []
+        self._streaming = True
+
+        # Spool state (lazy-initialised on fallback).
+        self._spool: Optional[tempfile.SpooledTemporaryFile] = None
         self._size = 0
         self._dirty = False
         self._closed = False
@@ -165,27 +180,106 @@ class WriteHandle(Handle):
 
     @property
     def size(self) -> int:
-        return self._size
+        return max(self._size, self._next_offset)
 
     async def write(self, offset: int, data: bytes) -> None:
         async with self._lock:
             if self._closed:
                 raise ValueError("write on a closed handle")
-            await asyncio.to_thread(self._write_sync, offset, data)
+            if self._streaming:
+                await self._write_streaming(offset, data)
+            else:
+                await asyncio.to_thread(self._write_spool, offset, data)
+
+    async def _write_streaming(self, offset: int, data: bytes) -> None:
+        if offset == self._next_offset:
+            self._buffer.extend(data)
+            self._next_offset += len(data)
+            self._size = max(self._size, self._next_offset)
+            self._dirty = True
+            while len(self._buffer) >= self._streaming_part_size:
+                await self._flush_part()
+        else:
+            await self._fallback_to_spool(offset, data)
+
+    async def _flush_part(self) -> None:
+        part = bytes(self._buffer[: self._streaming_part_size])
+        del self._buffer[: self._streaming_part_size]
+        name = f"[part{len(self._sent_messages) + 1}]{os.path.basename(self._path)}"
+        sent = await self._ops.upload_part(part, name)
+        self._sent_messages.extend(sent)
+
+    async def _fallback_to_spool(self, offset: int, data: bytes) -> None:
+        """Switch from streaming to spool mode after a non-sequential write."""
+        # Delete already-uploaded parts so they do not linger as orphans.
+        if self._sent_messages:
+            message_ids = [
+                m.message_id for m in self._sent_messages if m.message_id > 0
+            ]
+            if message_ids:
+                await self._ops.delete_uploaded_parts(message_ids)
+
+        self._spool = tempfile.SpooledTemporaryFile(
+            max_size=self._spool_max_bytes, dir=self._spool_dir
+        )
+
+        # Recover the content of the parts we just deleted so the spool has
+        # the full payload.  Goes through the file-content repository so
+        # encryption and mirror failover apply transparently.
+        if self._sent_messages:
+            downloaded = await self._ops.download_parts_back(
+                self._sent_messages, os.path.basename(self._path)
+            )
+            async for chunk in downloaded:
+                await asyncio.to_thread(self._spool.write, chunk)
+
+        # Write the in-memory buffer that was not yet uploaded.
+        if self._buffer:
+            await asyncio.to_thread(self._spool.write, bytes(self._buffer))
+
+        self._sent_messages = []
+        self._buffer = bytearray()
+
+        # Seek to the requested offset and write the new data.
+        await asyncio.to_thread(self._spool.seek, offset)
+        await asyncio.to_thread(self._spool.write, data)
+        self._size = max(self._next_offset, offset + len(data))
+        self._next_offset = self._size
+        self._dirty = True
+        self._streaming = False
 
     async def close(self) -> None:
-        """Commit the buffered payload as a new version of the file."""
+        """Commit the streamed payload as a new version of the file."""
         async with self._lock:
             if self._closed:
                 return
             self._closed = True
             try:
-                if self._dirty:
-                    await self._ops.upload_from_stream(
-                        self._iter_spool(), self._size, self._path
-                    )
+                if self._streaming:
+                    await self._close_streaming()
+                else:
+                    await self._close_spool()
             finally:
-                await asyncio.to_thread(self._spool.close)
+                if self._spool:
+                    await asyncio.to_thread(self._spool.close)
+
+    async def _close_streaming(self) -> None:
+        if not self._dirty:
+            return
+        if self._buffer:
+            await self._flush_part()
+        if self._sent_messages:
+            dirname, basename = os.path.dirname(self._path), os.path.basename(self._path)
+            await self._ops.commit_streamed_upload(
+                dirname, basename, self._sent_messages
+            )
+            self._sent_messages = []
+
+    async def _close_spool(self) -> None:
+        if self._dirty:
+            await self._ops.upload_from_stream(
+                self._iter_spool(), self._size, self._path
+            )
 
     async def abort(self) -> None:
         """Drop the buffered payload without touching the stored file."""
@@ -193,9 +287,19 @@ class WriteHandle(Handle):
             if self._closed:
                 return
             self._closed = True
-            await asyncio.to_thread(self._spool.close)
+            try:
+                if self._streaming and self._sent_messages:
+                    message_ids = [
+                        m.message_id for m in self._sent_messages if m.message_id > 0
+                    ]
+                    if message_ids:
+                        await self._ops.delete_uploaded_parts(message_ids)
+                if self._spool:
+                    await asyncio.to_thread(self._spool.close)
+            except Exception as ex:  # pragma: no cover - best effort cleanup
+                logger.debug("Failed to clean up an aborted upload: %s", ex)
 
-    def _write_sync(self, offset: int, data: bytes) -> None:
+    def _write_spool(self, offset: int, data: bytes) -> None:
         self._spool.seek(offset)
         self._spool.write(data)
         self._size = max(self._size, offset + len(data))

@@ -88,18 +88,28 @@ here is sparse, so `Handle.seek` answers with a single solid data region and
 raises `ENXIO` past the end. Without it, transfers from an asyncssh-based
 client fail outright — which is exactly what the integration test caught.
 
-### Writes: a size that is not known in advance
+### Writes: streaming uploads
 
 Telegram uploads need the total size up front (it decides the part layout);
-SFTP never sends it. So `WriteHandle` spools the payload — in memory up to
-`upload_buffer_size_mb`, on disk beyond that, via `SpooledTemporaryFile` —
-and only on `close()` streams it into `Ops.upload_from_stream` with the
-size now known.
+SFTP never sends it. `WriteHandle` addresses this with a streaming fast
+path: sequential writes are accumulated in a memory buffer and flushed to
+Telegram as soon as a full streaming part (`streaming_part_size_mb`,
+default 256 MB) has arrived. Only the resulting `message_id`s are kept;
+the final, incomplete part is buffered until `close()`, when the total
+size is known and the version is committed in one shot.
 
-Buffering is not just a workaround for the missing size: it also makes
-out-of-order and sparse writes work, since the spool is seekable, and it
-keeps a dropped connection from committing a truncated file — `exit()`
-aborts anything still open rather than closing it.
+This eliminates the stall where the client's progress bar reaches 100%
+and the transfer appears to freeze while the spool is drained, and it
+removes the need for scratch space the size of the file on the common
+path. Buffering is bounded, not eliminated: the worst case is one
+streaming part held in memory.
+
+A non-sequential write after parts have been pushed triggers a spool
+fallback: the uploaded parts are deleted, their content is downloaded
+back from Telegram, and the rest of the upload is spooled — in memory up
+to `upload_buffer_size_mb`, on disk beyond that — the way it was before
+streaming. A dropped connection is still safe: `exit()` aborts anything
+still open and deletes any parts that were already pushed.
 
 `Ops.touch()` is called at open time so the name shows up in a listing
 while the upload is still running, matching the WebDAV `PUT` path.
@@ -121,7 +131,6 @@ clients refuse to connect.
 
 All of these are shared with WebDAV and documented in the README:
 
-* uploads need scratch space the size of the file;
 * no append and no partial update — every write stores a new version;
 * moving between two clients is refused;
 * no symlinks and no real permissions; `setstat` accepts and ignores, since

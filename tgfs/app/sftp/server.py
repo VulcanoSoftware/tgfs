@@ -448,6 +448,7 @@ class TGFSSFTPServer(asyncssh.SFTPServer):
         handle = WriteHandle(
             ops=ops,
             path=resolved.relative,
+            streaming_part_size=sftp_cfg.streaming_part_size_bytes,
             spool_max_bytes=sftp_cfg.upload_buffer_size_bytes,
             spool_dir=sftp_cfg.upload_buffer_dir,
         )
