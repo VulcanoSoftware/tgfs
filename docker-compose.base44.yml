@@ -12,11 +12,11 @@ services:
       - BASE44_PUBLIC_HOST_SUFFIX=${BASE44_PUBLIC_HOST_SUFFIX}
     command: sh -c "npm install && npx next dev --turbopack -p 3000 -H 0.0.0.0"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 40s
+      start_period: 60s
     restart: on-failure
 
   api:
@@ -35,9 +35,10 @@ services:
       - TGFS_DATA_DIR=/data
       - TGFS_CONFIG_FILE=config.yaml
     command: >-
-      sh -c "pip install --quiet poetry &&
-      poetry config virtualenvs.create false &&
-      poetry install --only=main --no-root &&
+      sh -c "which gcc || (apt-get update && apt-get install -y --no-install-recommends build-essential) &&
+      pip install --quiet poetry &&
+      python -m poetry config virtualenvs.create false &&
+      python -m poetry install --only=main --no-root &&
       sh /app/scripts/dev-config.sh"
     healthcheck:
       test: ["CMD", "python", "/app/scripts/healthcheck.py"]

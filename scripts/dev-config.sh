@@ -27,7 +27,11 @@ tgfs:
   metadata:
     '${TGFS_CHANNEL_ID:-0}':
       name: default
-      type: pinned_message
+      type: github_repo
+      github_repo:
+        repo: ${TGFS_GITHUB_REPO:-tgfs-demo/tgfs-demo}
+        commit: 'master'
+        access_token: ${TGFS_GITHUB_TOKEN:-}
   server:
     host: 0.0.0.0
     port: 1900
