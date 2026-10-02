@@ -24,6 +24,7 @@ def ephemeral_config(tmp_path) -> SFTPConfig:
         authorized_keys_dir=None,
         upload_buffer_size_mb=1,
         upload_buffer_dir=None,
+        streaming_part_size_mb=256,
     )
 
 

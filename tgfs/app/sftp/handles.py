@@ -300,19 +300,21 @@ class WriteHandle(Handle):
                 logger.debug("Failed to clean up an aborted upload: %s", ex)
 
     def _write_spool(self, offset: int, data: bytes) -> None:
-        self._spool.seek(offset)
-        self._spool.write(data)
-        self._size = max(self._size, offset + len(data))
-        self._dirty = True
+        if self._spool is not None:
+            self._spool.seek(offset)
+            self._spool.write(data)
+            self._size = max(self._size, offset + len(data))
+            self._dirty = True
 
     async def _iter_spool(self) -> AsyncIterator[bytes]:
-        await asyncio.to_thread(self._spool.seek, 0)
-        remaining = self._size
-        while remaining > 0:
-            chunk = await asyncio.to_thread(
-                self._spool.read, min(SPOOL_READ_CHUNK, remaining)
-            )
-            if not chunk:
-                break
-            remaining -= len(chunk)
-            yield chunk
+        if self._spool is not None:
+            await asyncio.to_thread(self._spool.seek, 0)
+            remaining = self._size
+            while remaining > 0:
+                chunk = await asyncio.to_thread(
+                    self._spool.read, min(SPOOL_READ_CHUNK, remaining)
+                )
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
